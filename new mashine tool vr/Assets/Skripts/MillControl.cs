@@ -5,7 +5,6 @@ using Newtonsoft.Json.Linq;
 using UnityEngine;
 using UnityEngine.Networking;
 
-
 public class BypassCertificate : CertificateHandler
 {
     protected override bool ValidateCertificate(byte[] certificateData)
@@ -16,6 +15,10 @@ public class BypassCertificate : CertificateHandler
 
 public class MillControl : MonoBehaviour
 {
+    [Header("Управление кнопкой")]
+    [Tooltip("Станок будет двигаться только тогда, когда эта галочка включена.")]
+    public bool isWorking = false; 
+
     [Header("Режим работы")]
     [Tooltip("Включите, если сервер недоступен. Станок начнет двигаться автономно.")]
     public bool useFakeData = true;
@@ -37,57 +40,58 @@ public class MillControl : MonoBehaviour
     public Transform nodeZ;
 
     [Header("Настройка масштаба движений")]
-    [Tooltip("Если модель станка большая и движений не видно, увеличьте это число (например, до 0.01 или 0.1)")]
     public float modelScaleMultiplier = 0.001f;
 
     private Vector3 startX;
     private Vector3 startY;
     private Vector3 startZ;
 
+    
+    private float fakeTime = 0f;
+
     private IEnumerator Start()
     {
-      
         if (nodeX == null || nodeY == null || nodeZ == null)
         {
-            Debug.LogError("[CNC] Ошибка: Перетащите узлы станка (X, Y, Z) в поля скрипта в Inspector!");
+            Debug.LogError("[CNC] Ошибка: Перетащите узлы станка (X, Y, Z) в поля скрипта!");
             yield break;
         }
 
-       
         startX = nodeX.localPosition;
         startY = nodeY.localPosition;
         startZ = nodeZ.localPosition;
 
         while (true)
         {
+            
+            if (!isWorking)
+            {
+                yield return new WaitForSecondsRealtime(0.1f);
+                continue;
+            }
+
             if (useFakeData)
             {
                 
-                float time = Time.time * speedMultiplier;
+                fakeTime += Time.deltaTime * speedMultiplier;
 
-                
-                float xOffset = Mathf.Sin(time) * movementRange;
-                float yOffset = Mathf.Cos(time * 0.75f) * (movementRange * 0.7f);
+                float xOffset = Mathf.Sin(fakeTime) * movementRange;
+                float yOffset = Mathf.Cos(fakeTime * 0.75f) * (movementRange * 0.7f);
+                float zOffset = (Mathf.Sin(fakeTime) * (movementRange * 0.5f)) - spindleDownOffset;
 
-             
-                float zOffset = (Mathf.Sin(time) * (movementRange * 0.5f)) - spindleDownOffset;
-
-                
                 nodeX.localPosition = startX + Vector3.right * (xOffset * modelScaleMultiplier);
                 nodeY.localPosition = startY + Vector3.forward * (yOffset * modelScaleMultiplier);
                 nodeZ.localPosition = startZ + Vector3.up * (zOffset * modelScaleMultiplier);
             }
             else
             {
-                
                 using (UnityWebRequest request = UnityWebRequest.Get(url))
                 {
                     request.timeout = 10;
                     request.certificateHandler = new BypassCertificate();
-
                     yield return request.SendWebRequest();
 
-                    if (request.result == UnityWebRequest.Result.Success)
+                    if (request.result == UnityWebRequest.Result.Success && isWorking)
                     {
                         try
                         {
@@ -98,14 +102,9 @@ public class MillControl : MonoBehaviour
                             Debug.LogWarning("[CNC] Ошибка парсинга данных: " + error.Message);
                         }
                     }
-                    else
-                    {
-                        Debug.LogWarning("[CNC] Ошибка сети: " + request.error);
-                    }
                 }
             }
 
-            
             yield return new WaitForSecondsRealtime(useFakeData ? 0.02f : Mathf.Max(0.02f, interval));
         }
     }
@@ -113,57 +112,35 @@ public class MillControl : MonoBehaviour
     private float GetCoordinate(JObject data, string axis)
     {
         var dataArray = data["data"] as JArray;
-        if (dataArray == null)
-            throw new FormatException("В ответе сервера отсутствует массив 'data'.");
+        if (dataArray == null) throw new FormatException("В ответе сервера отсутствует массив 'data'.");
 
         foreach (JToken section in dataArray)
         {
             var sectionArray = section as JArray;
             if (sectionArray == null || sectionArray.Count < 2) continue;
+            if (sectionArray[0].ToString() != "Оси Канала " + channel) continue;
 
-            string sectionName = sectionArray?.ToString();
-            if (sectionName != "Оси Канала " + channel) continue;
-
-            var rows = sectionArray as JArray;
-            if (rows == null) continue;
-
-            foreach (JToken row in rows)
+            foreach (JToken row in sectionArray)
             {
                 var rowArray = row as JArray;
                 if (rowArray == null || rowArray.Count < 2) continue;
-
-                string rowName = rowArray?.ToString();
-                if (rowName == "Перемещение по оси " + axis)
+                if (rowArray[0].ToString() == "Перемещение по оси " + axis)
                 {
-                    string text = rowArray?.ToString().Replace("мм", "").Trim();
-                    if (string.IsNullOrEmpty(text))
-                        throw new FormatException($"Пустое значение для оси {axis}");
-
-                    text = text.Replace(',', '.');
-
+                    string text = rowArray[1].ToString().Replace("мм", "").Trim().Replace(',', '.');
                     if (float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out float value))
                     {
-                        if (float.IsNaN(value) || float.IsInfinity(value))
-                            throw new FormatException($"Некорректное числовое значение для оси {axis}");
-
                         return value;
                     }
-
-                    throw new FormatException($"Не удалось преобразовать '{text}' в число для оси {axis}");
                 }
             }
         }
-
-        throw new FormatException($"Координата для оси {axis} в 'Оси Канала {channel}' не найдена.");
+        throw new FormatException($"Координата для оси {axis} не найдена.");
     }
 
     private void MoveNodes(string json)
     {
-        if (string.IsNullOrEmpty(json)) return;
-        if (json.Trim().StartsWith("<")) return; 
-
+        if (string.IsNullOrEmpty(json) || json.Trim().StartsWith("<")) return;
         JObject data = JObject.Parse(json);
-
         float x = GetCoordinate(data, "X") * modelScaleMultiplier;
         float y = GetCoordinate(data, "Y") * modelScaleMultiplier;
         float z = GetCoordinate(data, "Z") * modelScaleMultiplier;
