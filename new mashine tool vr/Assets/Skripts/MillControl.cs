@@ -43,7 +43,6 @@ public class MillControl : MonoBehaviour
     private float fakeTime = 0f;
     private float currentX, currentY, currentZ;
 
-    // МЕТОД ДЛЯ КНОПКИ "ПУСК"
     public void StartMachine()
     {
         isWorking = true;
@@ -51,7 +50,7 @@ public class MillControl : MonoBehaviour
         Debug.Log("Пуск нажат");
     }
 
-    // МЕТОД ДЛЯ КНОПКИ "СТОП"
+    
     public void StopMachine()
     {
         isWorking = false;
