@@ -7,26 +7,23 @@ using UnityEngine.Networking;
 
 public class BypassCertificate : CertificateHandler
 {
-    protected override bool ValidateCertificate(byte[] certificateData)
-    {
-        return true;
-    }
+    protected override bool ValidateCertificate(byte[] certificateData) => true;
 }
 
 public class MillControl : MonoBehaviour
 {
-    [Header("Управление кнопкой")]
-    [Tooltip("Станок будет двигаться только тогда, когда эта галочка включена.")]
-    public bool isWorking = false; 
+    [Header("Панель управления (UI)")]
+    public MachinePanel panel;
+
+    [Header("Управление")]
+    public bool isWorking = false;
 
     [Header("Режим работы")]
-    [Tooltip("Включите, если сервер недоступен. Станок начнет двигаться автономно.")]
     public bool useFakeData = true;
 
     [Header("Настройки тестового режима")]
     [Range(1f, 15f)] public float speedMultiplier = 5f;
     [Range(50f, 500f)] public float movementRange = 300f;
-    [Tooltip("На сколько сместить шпиндель вниз относительно стартовой позиции")]
     [Range(0f, 400f)] public float spindleDownOffset = 150f;
 
     [Header("Настройки сети")]
@@ -42,18 +39,31 @@ public class MillControl : MonoBehaviour
     [Header("Настройка масштаба движений")]
     public float modelScaleMultiplier = 0.001f;
 
-    private Vector3 startX;
-    private Vector3 startY;
-    private Vector3 startZ;
-
-    
+    private Vector3 startX, startY, startZ;
     private float fakeTime = 0f;
+    private float currentX, currentY, currentZ;
+
+    // МЕТОД ДЛЯ КНОПКИ "ПУСК"
+    public void StartMachine()
+    {
+        isWorking = true;
+        if (panel != null) panel.ShowMessage("Команда Пуск принята");
+        Debug.Log("Пуск нажат");
+    }
+
+    // МЕТОД ДЛЯ КНОПКИ "СТОП"
+    public void StopMachine()
+    {
+        isWorking = false;
+        if (panel != null) panel.ShowMessage("Команда Стоп принята");
+        Debug.Log("Стоп нажат");
+    }
 
     private IEnumerator Start()
     {
         if (nodeX == null || nodeY == null || nodeZ == null)
         {
-            Debug.LogError("[CNC] Ошибка: Перетащите узлы станка (X, Y, Z) в поля скрипта!");
+            Debug.LogError("[CNC] Перетащите узлы станка!");
             yield break;
         }
 
@@ -61,46 +71,60 @@ public class MillControl : MonoBehaviour
         startY = nodeY.localPosition;
         startZ = nodeZ.localPosition;
 
+        if (panel != null) panel.ShowMessage("Система готова к работе");
+
         while (true)
         {
-            
             if (!isWorking)
             {
+                if (panel != null) panel.UpdateUI(false, currentX, currentY, currentZ);
                 yield return new WaitForSecondsRealtime(0.1f);
                 continue;
             }
 
             if (useFakeData)
             {
-                
                 fakeTime += Time.deltaTime * speedMultiplier;
 
-                float xOffset = Mathf.Sin(fakeTime) * movementRange;
-                float yOffset = Mathf.Cos(fakeTime * 0.75f) * (movementRange * 0.7f);
-                float zOffset = (Mathf.Sin(fakeTime) * (movementRange * 0.5f)) - spindleDownOffset;
+                currentX = Mathf.Sin(fakeTime) * movementRange;
+                currentY = Mathf.Cos(fakeTime * 0.75f) * (movementRange * 0.7f);
+                currentZ = (Mathf.Sin(fakeTime) * (movementRange * 0.5f)) - spindleDownOffset;
 
-                nodeX.localPosition = startX + Vector3.right * (xOffset * modelScaleMultiplier);
-                nodeY.localPosition = startY + Vector3.forward * (yOffset * modelScaleMultiplier);
-                nodeZ.localPosition = startZ + Vector3.up * (zOffset * modelScaleMultiplier);
+                ApplyMovement();
+                if (panel != null)
+                {
+                    panel.UpdateUI(true, currentX, currentY, currentZ);
+                    panel.ShowMessage("Автономный режим (OK)");
+                }
             }
             else
             {
+                if (panel != null) panel.ShowMessage("Запрос данных...");
                 using (UnityWebRequest request = UnityWebRequest.Get(url))
                 {
                     request.timeout = 10;
                     request.certificateHandler = new BypassCertificate();
                     yield return request.SendWebRequest();
 
-                    if (request.result == UnityWebRequest.Result.Success && isWorking)
+                    if (request.result == UnityWebRequest.Result.Success)
                     {
                         try
                         {
-                            MoveNodes(request.downloadHandler.text);
+                            ParseAndMove(request.downloadHandler.text);
+                            if (panel != null)
+                            {
+                                panel.UpdateUI(isWorking, currentX, currentY, currentZ);
+                                panel.ShowMessage("Связь с сервером: OK");
+                            }
                         }
                         catch (Exception error)
                         {
-                            Debug.LogWarning("[CNC] Ошибка парсинга данных: " + error.Message);
+                            if (panel != null) panel.ShowMessage("Ошибка данных: " + error.Message);
                         }
+                    }
+                    else
+                    {
+                        if (panel != null) panel.ShowMessage("Нет связи: " + request.error);
                     }
                 }
             }
@@ -109,10 +133,17 @@ public class MillControl : MonoBehaviour
         }
     }
 
+    private void ApplyMovement()
+    {
+        nodeX.localPosition = startX + Vector3.right * (currentX * modelScaleMultiplier);
+        nodeY.localPosition = startY + Vector3.forward * (currentY * modelScaleMultiplier);
+        nodeZ.localPosition = startZ + Vector3.up * (currentZ * modelScaleMultiplier);
+    }
+
     private float GetCoordinate(JObject data, string axis)
     {
         var dataArray = data["data"] as JArray;
-        if (dataArray == null) throw new FormatException("В ответе сервера отсутствует массив 'data'.");
+        if (dataArray == null) throw new FormatException("Нет массива 'data'");
 
         foreach (JToken section in dataArray)
         {
@@ -120,7 +151,10 @@ public class MillControl : MonoBehaviour
             if (sectionArray == null || sectionArray.Count < 2) continue;
             if (sectionArray[0].ToString() != "Оси Канала " + channel) continue;
 
-            foreach (JToken row in sectionArray)
+            var rows = sectionArray[1] as JArray;
+            if (rows == null) continue;
+
+            foreach (JToken row in rows)
             {
                 var rowArray = row as JArray;
                 if (rowArray == null || rowArray.Count < 2) continue;
@@ -128,25 +162,20 @@ public class MillControl : MonoBehaviour
                 {
                     string text = rowArray[1].ToString().Replace("мм", "").Trim().Replace(',', '.');
                     if (float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out float value))
-                    {
                         return value;
-                    }
                 }
             }
         }
-        throw new FormatException($"Координата для оси {axis} не найдена.");
+        throw new FormatException($"Ось {axis} не найдена");
     }
 
-    private void MoveNodes(string json)
+    private void ParseAndMove(string json)
     {
         if (string.IsNullOrEmpty(json) || json.Trim().StartsWith("<")) return;
         JObject data = JObject.Parse(json);
-        float x = GetCoordinate(data, "X") * modelScaleMultiplier;
-        float y = GetCoordinate(data, "Y") * modelScaleMultiplier;
-        float z = GetCoordinate(data, "Z") * modelScaleMultiplier;
-
-        nodeX.localPosition = startX + Vector3.right * x;
-        nodeY.localPosition = startY + Vector3.forward * y;
-        nodeZ.localPosition = startZ + Vector3.up * z;
+        currentX = GetCoordinate(data, "X");
+        currentY = GetCoordinate(data, "Y");
+        currentZ = GetCoordinate(data, "Z");
+        ApplyMovement();
     }
 }
