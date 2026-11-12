@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 87518ab377690044588b317bfef8580c
+timeCreated: 1466519729
+licenseType: Store
+NativeFormatImporter:
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 65575
+  packageName: Lathes
+  packageVersion: 1.0
+  assetPath: Assets/Lathes/Woodlathe/Materials/Woodlathe.mat
+  uploadId: 123663

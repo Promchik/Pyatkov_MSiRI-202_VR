@@ -15,8 +15,10 @@ public class MillControl : MonoBehaviour
     [Header("Панель управления (UI)")]
     public MachinePanel panel;
 
-    [Header("Управление")]
+    [Header("Управление и таймер")]
     public bool isWorking = false;
+    [Tooltip("Сколько секунд станок работает после нажатия Пуск (0 = бесконечно)")]
+    public float workDuration = 15f;
 
     [Header("Режим работы")]
     public bool useFakeData = true;
@@ -42,20 +44,60 @@ public class MillControl : MonoBehaviour
     private Vector3 startX, startY, startZ;
     private float fakeTime = 0f;
     private float currentX, currentY, currentZ;
+    private Coroutine autoStopCoroutine; // Ссылка на активный таймер
 
+    // МЕТОД ДЛЯ КНОПКИ "ПУСК"
     public void StartMachine()
     {
         isWorking = true;
-        if (panel != null) panel.ShowMessage("Команда Пуск принята");
+
+        // Если таймер уже шел (например, нажали Пуск повторно), перезапускаем его
+        if (autoStopCoroutine != null)
+        {
+            StopCoroutine(autoStopCoroutine);
+        }
+
+        // Запускаем таймер автовыключения, если задано время больше нуля
+        if (workDuration > 0f)
+        {
+            autoStopCoroutine = StartCoroutine(AutoStopTimer());
+            if (panel != null) panel.ShowMessage($"Запущен (цикл {workDuration} сек)");
+        }
+        else
+        {
+            if (panel != null) panel.ShowMessage("Команда Пуск принята");
+        }
+
         Debug.Log("Пуск нажат");
     }
 
-    
+    // МЕТОД ДЛЯ КНОПКИ "СТОП"
     public void StopMachine()
     {
         isWorking = false;
+
+        // Отменяем таймер, так как станок остановили вручную
+        if (autoStopCoroutine != null)
+        {
+            StopCoroutine(autoStopCoroutine);
+            autoStopCoroutine = null;
+        }
+
         if (panel != null) panel.ShowMessage("Команда Стоп принята");
         Debug.Log("Стоп нажат");
+    }
+
+    // Корутина-таймер для автоматической остановки
+    private IEnumerator AutoStopTimer()
+    {
+        yield return new WaitForSeconds(workDuration);
+
+        // Время вышло — выключаем станок
+        isWorking = false;
+        autoStopCoroutine = null;
+
+        if (panel != null) panel.ShowMessage("Цикл завершен (Автостоп)");
+        Debug.LogWarning($"[CNC] Прошло {workDuration} сек. Станок автоматически остановлен.");
     }
 
     private IEnumerator Start()
@@ -93,12 +135,10 @@ public class MillControl : MonoBehaviour
                 if (panel != null)
                 {
                     panel.UpdateUI(true, currentX, currentY, currentZ);
-                    panel.ShowMessage("Автономный режим (OK)");
                 }
             }
             else
             {
-                if (panel != null) panel.ShowMessage("Запрос данных...");
                 using (UnityWebRequest request = UnityWebRequest.Get(url))
                 {
                     request.timeout = 10;
@@ -113,7 +153,6 @@ public class MillControl : MonoBehaviour
                             if (panel != null)
                             {
                                 panel.UpdateUI(isWorking, currentX, currentY, currentZ);
-                                panel.ShowMessage("Связь с сервером: OK");
                             }
                         }
                         catch (Exception error)
@@ -148,18 +187,18 @@ public class MillControl : MonoBehaviour
         {
             var sectionArray = section as JArray;
             if (sectionArray == null || sectionArray.Count < 2) continue;
-            if (sectionArray[0].ToString() != "Оси Канала " + channel) continue;
+            if (sectionArray.ToString() != "Оси Канала " + channel) continue;
 
-            var rows = sectionArray[1] as JArray;
+            var rows = sectionArray as JArray;
             if (rows == null) continue;
 
             foreach (JToken row in rows)
             {
                 var rowArray = row as JArray;
                 if (rowArray == null || rowArray.Count < 2) continue;
-                if (rowArray[0].ToString() == "Перемещение по оси " + axis)
+                if (rowArray.ToString() == "Перемещение по оси " + axis)
                 {
-                    string text = rowArray[1].ToString().Replace("мм", "").Trim().Replace(',', '.');
+                    string text = rowArray.ToString().Replace("мм", "").Trim().Replace(',', '.');
                     if (float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out float value))
                         return value;
                 }
